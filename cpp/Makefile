@@ -6,15 +6,15 @@ endif
 CC = g++
 CLCC = xocc
 
-CC_FLAGS = --std=c++11 -O3 -Wno-deprecated-declarations
+CC_FLAGS = --std=c++11 -O3 -Wno-deprecated-declarations -fopenmp
 
 BITSTREAM_NAME = NaiveBayes
 HOST_EXE = ${BITSTREAM_NAME}
 
 PLATFORM = ${AWS_PLATFORM}
 
-HOST_DIR = host_srcs
-KERNEL_DIR = kernel_srcs
+HOST_DIR = src
+KERNEL_DIR = kernel_src
 KERNEL_TYPE = cpp
 
 # Host and Kernel sources
@@ -53,8 +53,7 @@ BANKS = --sp Classifier_0_1.m_axi_gmem0:bank0 \
 VIVADO_OPTS = --xp misc:enableGlobalHoldIter="True" \
 		--xp vivado_prop:run.impl_1.STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE=NoTimingRelaxation
 
-all:
-	make _TEST_="-D _TEST_" host
+all: host xbin
 
 host: ${HOST_EXE}
 
@@ -68,7 +67,7 @@ xbin: ${KERNEL_OBJECTS}
 	${RM} -rf ${KERNEL_OBJECTS}
 
 %.o: %.cpp
-	${CC} ${CC_FLAGS} ${_TEST_} -c $< -o $@
+	${CC} ${CC_FLAGS} -c $< -o $@
 
 # Building kernel
 %.xo: %.cpp

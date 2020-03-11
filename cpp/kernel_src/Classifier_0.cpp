@@ -30,7 +30,7 @@ union {
 } converter0, converter1, converter2;
 
 extern "C" {
-void Classifier_1(float8 *_features, float8 *_means, float8 *_variances,
+void Classifier_0(float8 *_features, float8 *_means, float8 *_variances,
                   float *_priors, int *_prediction, float epsilon,
                   int numClasses, int numFeatures, int chunkSize) {
 #pragma HLS INTERFACE m_axi port = _features offset = slave bundle = gmem0
@@ -128,13 +128,13 @@ void Classifier_1(float8 *_features, float8 *_means, float8 *_variances,
             converter2.asInt = variances[k][j].range((t + 1) * 32 - 1, t * 32);
 
             float dPiVariances = d_Pi * (converter2.asFloat + epsilon);
-            float firstGroup = 0.5f * logf(dPiVariances);
+            float firstGroup = dPiVariances ? 0.5f * logf(dPiVariances) : 0;
 
             float difSquared =
                 (float)(converter0.asFloat - converter1.asFloat) *
                 (converter0.asFloat - converter1.asFloat);
             float variancesD = 2.0f * (converter2.asFloat + epsilon);
-            float secondGroup = difSquared / variancesD;
+            float secondGroup = variancesD ? difSquared / variancesD : 0;
 
             numerator[k][c * vectorSize + t] -= firstGroup + secondGroup;
           }
