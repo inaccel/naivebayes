@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <!--
-~ Copyright © 2018-2019 InAccel
+~ Copyright © 2018-2021 InAccel
 ~
 ~ Licensed under the Apache License, Version 2.0 (the "License");
 ~ you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 	<groupId>com.inaccel</groupId>
 	<artifactId>ml</artifactId>
 
-	<version>0.1</version>
+	<version>0.2</version>
 
 	<packaging>jar</packaging>
 
@@ -34,21 +34,13 @@
 		<url>https://www.inaccel.com/</url>
 	</organization>
 
-	<repositories>
-		<repository>
-			<id>inaccel</id>
-			<name>InAccel Repository</name>
-			<url>http://jfrog.inaccel.com/artifactory/libs-release</url>
-		</repository>
-	</repositories>
-
 	<build>
 		<plugins>
 
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-dependency-plugin</artifactId>
-				<version>3.1.1</version>
+				<version>3.1.2</version>
 				<executions>
 					<execution>
 						<phase>package</phase>
@@ -67,7 +59,7 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-jar-plugin</artifactId>
-				<version>3.1.0</version>
+				<version>3.2.0</version>
 				<executions>
 					<execution>
 						<phase>package</phase>
@@ -109,20 +101,10 @@
 		<dependency>
 			<groupId>com.inaccel</groupId>
 			<artifactId>coral-api</artifactId>
-			<version>1.8</version>
+			<version>2.0.0</version>
 		</dependency>
 
 	</dependencies>
-
-	<distributionManagement>
-
-		<repository>
-			<id>inaccel</id>
-			<name>InAccel Repository</name>
-			<url>http://jfrog.inaccel.com/artifactory/libs-release</url>
-		</repository>
-
-	</distributionManagement>
 
 	<properties>
 		<maven.compiler.source>1.8</maven.compiler.source>

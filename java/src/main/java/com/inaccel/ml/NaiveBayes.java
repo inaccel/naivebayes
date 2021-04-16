@@ -1,5 +1,5 @@
 /**
-* Copyright © 2018-2020 InAccel
+* Copyright © 2018-2021 InAccel
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,36 +16,37 @@
 
 package com.inaccel.ml;
 
-import com.inaccel.coral.InAccel;
-import com.inaccel.coral.msg.Request;
-import com.inaccel.coral.shm.SharedIntVector;
-import com.inaccel.coral.shm.SharedFloatMatrix;
-import com.inaccel.coral.shm.SharedFloatVector;
+import com.inaccel.coral.*;
+
+import io.netty.buffer.ByteBuf;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.concurrent.Future;
+import java.util.List;
 
 public class NaiveBayes {
 	private static final int NUMCLASSES_MAX = 64; // Max number of model classes
 	private static final int NUMFEATURES_MAX = 2047; // Max number of model features
 
 	private static final int NUM_REQUESTS = 8; // Number of requests for InAccel Coral
-	private static final int VECTORIZATION = 16; // Vectorization of features in HW
+	private static final int VECTORIZATION = 8; // Vectorization of features in HW
 	private static final int PARALLELISM = 8; // Parallelism for chunkSize in HW
 
 	private int [] labels;
-	private SharedFloatMatrix [] features = new SharedFloatMatrix[NUM_REQUESTS];
+	private ByteBuf [] features = new ByteBuf[NUM_REQUESTS];
 
 	private float [] priors;
 	private float [][] means;
 	private float [][] variances;
 
-	private SharedFloatVector [] _priors = new SharedFloatVector[NUM_REQUESTS];
-	private SharedFloatMatrix [] _means = new SharedFloatMatrix[NUM_REQUESTS];
-	private SharedFloatMatrix [] _variances = new SharedFloatMatrix[NUM_REQUESTS];
+	private ByteBuf [] _priors = new ByteBuf[NUM_REQUESTS];
+	private ByteBuf [] _means = new ByteBuf[NUM_REQUESTS];
+	private ByteBuf [] _variances = new ByteBuf[NUM_REQUESTS];
 
-	private SharedIntVector [] predictions = new SharedIntVector[NUM_REQUESTS];
+	private ByteBuf [] predictions = new ByteBuf[NUM_REQUESTS];
 
 	private final int numClasses;
 	private final int numFeatures;
@@ -60,11 +61,13 @@ public class NaiveBayes {
 		means = new float[numClasses][numFeatures];
 		variances = new float[numClasses][numFeatures];
 
+		int numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
+
 		try {
 			for (int i = 0; i < NUM_REQUESTS; i++) {
-				_priors[i] = new SharedFloatVector(numClasses).alloc();
-				_means[i] = new SharedFloatMatrix(numClasses, numFeatures).setRowAttributes(0, VECTORIZATION).alloc();
-				_variances[i] = new SharedFloatMatrix(numClasses, numFeatures).setRowAttributes(0, VECTORIZATION).alloc();
+				_priors[i] = InAccelByteBufAllocator.DEFAULT.buffer(numClasses * Float.BYTES);
+				_means[i] = InAccelByteBufAllocator.DEFAULT.buffer(numClasses * numFeaturesPadded * Float.BYTES);
+				_variances[i] = InAccelByteBufAllocator.DEFAULT.buffer(numClasses * numFeaturesPadded * Float.BYTES);
 			}
 		} catch (Exception e) {
 			System.err.println("Could not allocate shared buffers. Is InAccel Coral running?");
@@ -94,6 +97,8 @@ public class NaiveBayes {
 			}
 		}
 
+		int numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
+
 		int c = 0;
 		for (int n = 0, i = 0; n < labels.length; n++, i++) {
 			int label = labels[n];
@@ -105,7 +110,7 @@ public class NaiveBayes {
 			}
 
 			for (int j = 0; j < numFeatures; j++) {
-				float data = features[c].get(i,j);
+				float data = features[c].getFloat(Float.BYTES * (i * numFeaturesPadded + j));
 				sums[label][j] += data;
 				sq_sums[label][j] += data * data;
 			}
@@ -138,7 +143,7 @@ public class NaiveBayes {
 				i = 0;
 			}
 
-			if (predictions[c].get(i) == labels[n]) cor++;
+			if (predictions[c].getInt(Integer.BYTES * i) == labels[n]) cor++;
 
 			total++;
 		}
@@ -156,9 +161,12 @@ public class NaiveBayes {
 		chunkSize = numExamples / NUM_REQUESTS;
 		if ((numExamples % NUM_REQUESTS) != 0) chunkSize++;
 
+		int chunkSizePadded = (chunkSize + (PARALLELISM - 1)) & (~(PARALLELISM - 1));
+		int numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
+
 		try {
 			for (int i = 0; i < NUM_REQUESTS; i++) {
-				features[i] = new SharedFloatMatrix(chunkSize, numFeatures).setRowAttributes(0, 16).setColAttributes(0, 8).alloc();
+				features[i] = InAccelByteBufAllocator.DEFAULT.buffer(chunkSizePadded * numFeaturesPadded * Float.BYTES);
 			}
 		} catch (Exception e) {
 			System.err.println("Could not allocate shared buffers. Is InAccel Coral running?");
@@ -182,7 +190,7 @@ public class NaiveBayes {
 
 				labels[n] = Integer.parseInt(tokens[0]);
 				for (int j = 0; j < numFeatures; j++) {
-					features[c].put(i, j, Float.parseFloat(tokens[j + 1]));
+					features[c].setFloat(Float.BYTES * (i * numFeaturesPadded + j), Float.parseFloat(tokens[j + 1]));
 				}
 
 				n++;
@@ -207,7 +215,7 @@ public class NaiveBayes {
 
 		try {
 			for (int i = 0; i < NUM_REQUESTS; i++) {
-				predictions[i] = new SharedIntVector(chunkSize).alloc();
+				predictions[i] = InAccelByteBufAllocator.DEFAULT.buffer(chunkSize * Integer.BYTES);
 			}
 		} catch(Exception e) {
 			System.err.println("Could not allocate shared buffer. Is InAccel Coral running?");
@@ -215,20 +223,22 @@ public class NaiveBayes {
 			System.exit(-1);
 		}
 
+		int numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
+
 		for (int n = 0; n < NUM_REQUESTS; n++) {
 			for (int k = 0; k < numClasses; k++) {
-				_priors[n].put(k, priors[k]);
+				_priors[n].setFloat(Float.BYTES * k, priors[k]);
 				for (int j = 0; j < numFeatures; j++) {
-					_means[n].put(k, j, means[k][j]);
-					_variances[n].put(k, j, variances[k][j]);
+					_means[n].setFloat(Float.BYTES * (k * numFeaturesPadded + j), means[k][j]);
+					_variances[n].setFloat(Float.BYTES * (k * numFeaturesPadded + j), variances[k][j]);
 				}
 			}
 		}
 
-		Request [] requests = new Request[NUM_REQUESTS];
+		InAccel.Request[] requests = new InAccel.Request[NUM_REQUESTS];
 
 		for (int n = 0; n < NUM_REQUESTS; n++) {
-			requests[n] = new Request("com.inaccel.ml.NaiveBayes.Classifier")
+			requests[n] = new InAccel.Request("com.inaccel.ml.NaiveBayes.Classifier")
 				.arg(features[n])
 				.arg(_means[n])
 				.arg(_variances[n])
@@ -240,11 +250,11 @@ public class NaiveBayes {
 				.arg(chunkSize);
 		}
 
-		InAccel [] sessions = new InAccel[NUM_REQUESTS];
+	 	List<Future<Void>> responses = new ArrayList<>(NUM_REQUESTS);
 
 		try {
 			for (int n = 0; n < NUM_REQUESTS; n++) {
-				sessions[n] = InAccel.submit(requests[n]);
+				responses.add(n, InAccel.submit(requests[n]));
 			}
 		} catch(Exception e) {
 			System.err.println("Could not submit requests to InAccel Coral");
@@ -254,7 +264,7 @@ public class NaiveBayes {
 
 		try {
 			for (int n = 0; n < NUM_REQUESTS; n++) {
-				InAccel.wait(sessions[n]);
+				responses.get(n).get();
 			}
 		} catch(Exception e) {
 			System.err.println("Error waiting on request to finish!");

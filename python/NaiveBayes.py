@@ -1,4 +1,4 @@
-# Copyright © 2018-2020 InAccel
+# Copyright © 2018-2021 InAccel
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,10 +41,11 @@ class NB:
 		self._means = []
 		self._variances = []
 
-		for x in range(0, self.NUM_REQUESTS):
-			self._priors.append(inaccel.ndarray(numClasses, dtype = np.float32))
-			self._means.append(inaccel.ndarray(numClasses * self.numFeaturesPadded, dtype = np.float32))
-			self._variances.append(inaccel.ndarray(numClasses * self.numFeaturesPadded, dtype = np.float32))
+		with inaccel.allocator:
+			for x in range(0, self.NUM_REQUESTS):
+				self._priors.append(np.ndarray(numClasses, dtype = np.float32))
+				self._means.append(np.ndarray(numClasses * self.numFeaturesPadded, dtype = np.float32))
+				self._variances.append(np.ndarray(numClasses * self.numFeaturesPadded, dtype = np.float32))
 
 	def load_data(self, filename, numExamples):
 		print("\n -- Reading input file ", end='')
@@ -60,8 +61,9 @@ class NB:
 
 		self.features = []
 
-		for x in range(0, self.NUM_REQUESTS):
-			self.features.append(inaccel.ndarray(self.chunkSize * self.numFeaturesPadded, dtype = np.float32))
+		with inaccel.allocator:
+			for x in range(0, self.NUM_REQUESTS):
+				self.features.append(np.ndarray(self.chunkSize * self.numFeaturesPadded, dtype = np.float32))
 
 		self._features = np.ndarray((numExamples, self.numFeaturesPadded), dtype = np.float32)
 
@@ -139,8 +141,9 @@ class NB:
 
 		self.predictions = []
 
-		for i in range(0, self.NUM_REQUESTS):
-			self.predictions.append(inaccel.ndarray(self.chunkSize, dtype = np.int32))
+		with inaccel.allocator:
+			for i in range(0, self.NUM_REQUESTS):
+				self.predictions.append(np.ndarray(self.chunkSize, dtype = np.int32))
 
 		for n in range(0, self.NUM_REQUESTS):
 			self._priors[n][:] = self.priors[:]
@@ -150,16 +153,16 @@ class NB:
 				self._means[n][idx:idx + self.numFeatures] = self.means[k][:];
 				self._variances[n][idx:idx + self.numFeatures] = self.variances[k][:];
 
-		sessions = []
+		responses = []
 		for n in range(0, self.NUM_REQUESTS):
 			req = inaccel.request("com.inaccel.ml.NaiveBayes.Classifier")
 
 			req.arg(self.features[n]).arg(self._means[n]).arg(self._variances[n]).arg(self._priors[n]).arg(self.predictions[n]).arg(np.float32(epsilon)).arg(np.int32(self.numClasses)).arg(np.int32(self.numFeatures)).arg(np.int32(self.chunkSize))
 
-			sessions.append(inaccel.submit(req))
+			responses.append(inaccel.submit(req))
 
 		for n in range(0, self.NUM_REQUESTS):
-			inaccel.wait(sessions[n])
+			responses[n].result()
 
 		end = int(round(time.time() * 100))
 

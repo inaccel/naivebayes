@@ -73,7 +73,7 @@ To run the demo you first have to download the dataset upon which we will evalua
 Create a folder called **data** under your home directory and download there MNIST letters dataset
 	``` bash
 	mkidr ~/data
-	wget https://s3.amazonaws.com/inaccel-demo/data/nist/letters_csv_train.dat -O ~data/letters_csv_train.dat
+	wget https://s3.amazonaws.com/inaccel-demo/data/nist/letters_csv_train.dat -O ~/data/letters_csv_train.dat
 	```
 
 * **Setup Inaccel and Coral API**  
@@ -81,11 +81,11 @@ Create a folder called **data** under your home directory and download there MNI
 <img src="https://www.inaccel.com/wp-content/uploads/coral_logo_big-1-e1561553344239.png" width=60% height=60% align="middle" alt="InAccel Coral"/>
 </p>
 
-The host code sends requests for acceleration to Coral FPGA Resource Manager through the Coral API. To use Coral please follow the instructions below.  You can find **full documentation** in [InAccel Docs](https://docs.inaccel.com/latest/).
+The host code sends requests for acceleration to Coral FPGA Resource Manager through the Coral API. To use Coral please follow the instructions below.  You can find **full documentation** in [InAccel Docs](https://docs.inaccel.com/).
 
-1. [Install **InAccel CLI**](https://docs.inaccel.com/latest/inaccel/install/rpm/).
-1. [Setup your Environment](https://docs.inaccel.com/latest/tutorial/setup/).
-1. [Install **Coral API**](https://docs.inaccel.com/latest/tutorial/api/c++/).
+1. [Install **InAccel CLI**](https://docs.inaccel.com/install/rpm/).
+1. [Setup your Environment](https://docs.inaccel.com/get-started/part2/).
+1. [Install **Coral API**](https://setup.inaccel.com/coral-api/?cpp).
 1. Install **Coral API** for **python**:
 	``` bash
 	pip3 install coral-api
@@ -118,9 +118,11 @@ For the Java version use maven as described above, while for python use python3 
 	```bash
 	./NaiveBayes 8 1
 	```
-	For the Java implementation the command will look like this:
+	For the Java implementation the command is the following. It adds all required classes to classpath and invokes java binary with NaiveBayesTest as the main class.
 	```bash
-	java -cp ${HOME}/jars/ml-0.1-tests.jar:${HOME}/jars/ml-0.1.jar:${HOME}/jars/coral-api-1.8.jar NaiveBayesTest
+	classpath=''; \
+	for jar in `ls ${HOME}/jars/*.jar`; do classpath+=:${jar}; done; \
+	java -cp ${classpath} NaiveBayesTest
 	```
 	And for the Python implementation:
 	```bash

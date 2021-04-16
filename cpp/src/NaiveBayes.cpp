@@ -1,5 +1,5 @@
 /**
-* Copyright © 2018-2020 InAccel
+* Copyright © 2018-2021 InAccel
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -234,12 +234,11 @@ void NaiveBayes::classifyHW(float epsilon) {
 		}
 	}
 
-	std::vector<inaccel::request> nbc;
-	std::vector<inaccel::session> sessions(NUM_REQUESTS);
+	std::vector<std::future<void>> responses(NUM_REQUESTS);
 	for (int n = 0; n < NUM_REQUESTS; n++) {
-		nbc.push_back(inaccel::request{"com.inaccel.ml.NaiveBayes.Classifier"});
+		inaccel::request nbc("com.inaccel.ml.NaiveBayes.Classifier");
 
-		nbc[n].arg(features[n])
+		nbc.arg(features[n])
 			.arg(_means[n])
 			.arg(_variances[n])
 			.arg(_priors[n])
@@ -248,14 +247,12 @@ void NaiveBayes::classifyHW(float epsilon) {
 			.arg(numClasses)
 			.arg(numFeatures)
 			.arg(chunkSize);
+
+		responses[n] = inaccel::submit(nbc);
 	}
 
 	for (int n = 0; n < NUM_REQUESTS; n++) {
-		sessions[n] = inaccel::submit(nbc[n]);
-	}
-
-	for (int n = 0; n < NUM_REQUESTS; n++) {
-		inaccel::wait(sessions[n]);
+		responses[n].get();
 	}
 }
 

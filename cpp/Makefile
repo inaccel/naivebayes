@@ -1,7 +1,3 @@
-ifndef AWS_PLATFORM
-$(error AWS_PLATFORM is not set)
-endif
-
 # Host compiler global settings
 CC = g++
 CLCC = xocc
@@ -57,12 +53,15 @@ all: host xbin
 
 host: ${HOST_EXE}
 
+check_platform_defined:
+	$(if $(value AWS_PLATFORM),,$(error AWS_PLATFORM is not set))
+
 # Building host
 ${HOST_EXE}: ${HOST_OBJECTS}
 	${CC} ${CC_FLAGS} ${HOST_OBJECTS} ${HOST_LFLAGS} -o $@
 	${RM} -rf ${HOST_OBJECTS}
 
-xbin: ${KERNEL_OBJECTS}
+xbin: check_platform_defined ${KERNEL_OBJECTS}
 	${CLCC} -t hw --link -s --platform ${PLATFORM} ${BANKS} ${VIVADO_OPTS} ${KERNEL_OBJECTS} -o ${BITSTREAM_NAME}.xclbin
 	${RM} -rf ${KERNEL_OBJECTS}
 
