@@ -17,9 +17,7 @@
 package com.inaccel.ml;
 
 import com.inaccel.coral.*;
-
 import io.netty.buffer.ByteBuf;
-
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
@@ -33,44 +31,32 @@ public class NaiveBayes {
 
 	private static final int NUM_REQUESTS = 8; // Number of requests for InAccel Coral
 	private static final int VECTORIZATION = 8; // Vectorization of features in HW
-	private static final int PARALLELISM = 8; // Parallelism for chunkSize in HW
+	private static final int PARALLELISM = 4096; // Parallelism for chunkSize in HW
 
 	private int [] labels;
-	private ByteBuf [] features = new ByteBuf[NUM_REQUESTS];
-
-	private float [] priors;
-	private float [][] means;
-	private float [][] variances;
-
-	private ByteBuf [] _priors = new ByteBuf[NUM_REQUESTS];
-	private ByteBuf [] _means = new ByteBuf[NUM_REQUESTS];
-	private ByteBuf [] _variances = new ByteBuf[NUM_REQUESTS];
-
-	private ByteBuf [] predictions = new ByteBuf[NUM_REQUESTS];
+	private ByteBuf features;
+	private ByteBuf priors;
+	private ByteBuf means;
+	private ByteBuf variances;
+	private ByteBuf predictions;
 
 	private final int numClasses;
 	private final int numFeatures;
+	private final int numFeaturesPadded;
 
 	private int chunkSize;
 
 	public NaiveBayes(int numClasses, int numFeatures) {
 		this.numClasses = numClasses;
 		this.numFeatures = numFeatures;
-
-		priors = new float[numClasses];
-		means = new float[numClasses][numFeatures];
-		variances = new float[numClasses][numFeatures];
-
-		int numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
+		numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
 
 		try {
-			for (int i = 0; i < NUM_REQUESTS; i++) {
-				_priors[i] = InAccelByteBufAllocator.DEFAULT.buffer(numClasses * Float.BYTES);
-				_means[i] = InAccelByteBufAllocator.DEFAULT.buffer(numClasses * numFeaturesPadded * Float.BYTES);
-				_variances[i] = InAccelByteBufAllocator.DEFAULT.buffer(numClasses * numFeaturesPadded * Float.BYTES);
-			}
+			priors = InAccelByteBufAllocator.DEFAULT.buffer(numClasses * Float.BYTES);
+			means = InAccelByteBufAllocator.DEFAULT.buffer(numClasses * numFeaturesPadded * Float.BYTES);
+			variances = InAccelByteBufAllocator.DEFAULT.buffer(numClasses * numFeaturesPadded * Float.BYTES);
 		} catch (Exception e) {
-			System.err.println("Could not allocate shared buffers. Is InAccel Coral running?");
+			System.err.println("Could not allocate shared buffers. Is InAccel service running?");
 			e.printStackTrace();
 			System.exit(-1);
 		}
@@ -86,7 +72,6 @@ public class NaiveBayes {
 		int [] class_cnt = new int[numClasses];
 		float [][] sums = new float [numClasses][numFeatures];
 		float [][] sq_sums = new float [numClasses][numFeatures];
-		float [][] sq_feature_means = new float [numClasses][numFeatures];
 
 		for (int k = 0; k < numClasses; k++) {
 			class_cnt[k] = 0;
@@ -97,58 +82,41 @@ public class NaiveBayes {
 			}
 		}
 
-		int numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
-
-		int c = 0;
-		for (int n = 0, i = 0; n < labels.length; n++, i++) {
-			int label = labels[n];
+		for (int i = 0; i < labels.length; i++) {
+			int label = labels[i];
 			class_cnt[label]++;
 
-			if ((n != 0) && ((n % chunkSize) == 0)) {
-				c++;
-				i = 0;
-			}
-
 			for (int j = 0; j < numFeatures; j++) {
-				float data = features[c].getFloat(Float.BYTES * (i * numFeaturesPadded + j));
+				float data = features.getFloat(Float.BYTES * (i * numFeaturesPadded + j));
 				sums[label][j] += data;
 				sq_sums[label][j] += data * data;
 			}
 		}
 
 		for (int k = 0; k < numClasses; k++) {
-			priors[k] = class_cnt[k] / (float) numFeatures;
+			priors.setFloat(Float.BYTES * k, class_cnt[k] / (float) numFeatures);
 
 			for (int j = 0; j < numFeatures; j++) {
-				means[k][j] = sums[k][j] / (float)class_cnt[k];
-				sq_feature_means[k][j] = sq_sums[k][j] / (float)class_cnt[k];
-				variances[k][j] = sq_feature_means[k][j] - (means[k][j] * means[k][j]);
+				means.setFloat(Float.BYTES * (k * numFeaturesPadded + j), sums[k][j] / (float)class_cnt[k]);
+				variances.setFloat(Float.BYTES * (k * numFeaturesPadded + j), (sq_sums[k][j] / (float)class_cnt[k]) - (means.getFloat(Float.BYTES * (k * numFeaturesPadded + j)) * means.getFloat(Float.BYTES * (k * numFeaturesPadded + j))));
 			}
 		}
 
 		long end = System.nanoTime();
 
 		double duration = (end - start) / (double) 1000000000;
-		System.out.println("took: " + String.format("%.2f", duration) + "s");
+		System.out.println(String.format("took: %.2fs", duration));
 	}
 
 	public void predict(float epsilon) {
 		classify(epsilon);
 
-		int cor = 0, total = 0;
-		int c = 0;
-		for (int n = 0, i = 0; n < labels.length; n++, i++) {
-			if ((n != 0) && ((n % chunkSize) == 0)) {
-				c++;
-				i = 0;
-			}
-
-			if (predictions[c].getInt(Integer.BYTES * i) == labels[n]) cor++;
-
-			total++;
+		int cor = 0;
+		for (int i = 0; i < labels.length; i++) {
+			if (predictions.getInt(Integer.BYTES * i) == labels[i]) cor++;
 		}
 
-		System.out.println("\n -- Accuracy: " + String.format("%.2f", (100 * (float)(cor) / total)) + "% (" + cor + "/" + total + ")\n");
+		System.out.println(String.format("\n -- Accuracy: %.2f %% (%d/%d)\n", (100 * (float)(cor) / labels.length), cor, labels.length));
 	}
 
 	private void load_data(String filename, int numExamples) {
@@ -161,15 +129,12 @@ public class NaiveBayes {
 		chunkSize = numExamples / NUM_REQUESTS;
 		if ((numExamples % NUM_REQUESTS) != 0) chunkSize++;
 
-		int chunkSizePadded = (chunkSize + (PARALLELISM - 1)) & (~(PARALLELISM - 1));
-		int numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
+		chunkSize = (chunkSize + (PARALLELISM - 1)) & (~(PARALLELISM - 1));
 
 		try {
-			for (int i = 0; i < NUM_REQUESTS; i++) {
-				features[i] = InAccelByteBufAllocator.DEFAULT.buffer(chunkSizePadded * numFeaturesPadded * Float.BYTES);
-			}
+			features = InAccelByteBufAllocator.DEFAULT.buffer(NUM_REQUESTS * chunkSize * numFeaturesPadded * Float.BYTES);
 		} catch (Exception e) {
-			System.err.println("Could not allocate shared buffers. Is InAccel Coral running?");
+			System.err.println("Could not allocate shared buffers. Is InAccel service running?");
 			e.printStackTrace();
 			System.exit(-1);
 		}
@@ -178,22 +143,16 @@ public class NaiveBayes {
 			BufferedReader reader = new BufferedReader(new FileReader(filename));
 
 			String line;
-			int n = 0, i = 0, c = 0;
+			int i = 0;
 
-			while (((line = reader.readLine()) != null) && (n < numExamples)) {
-				if ((n != 0) && ((n % chunkSize) == 0)) {
-					c++;
-					i = 0;
-				}
-
+			while (((line = reader.readLine()) != null) && (i < numExamples)) {
 				String [] tokens = line.split(",");
 
-				labels[n] = Integer.parseInt(tokens[0]);
+				labels[i] = Integer.parseInt(tokens[0]);
 				for (int j = 0; j < numFeatures; j++) {
-					features[c].setFloat(Float.BYTES * (i * numFeaturesPadded + j), Float.parseFloat(tokens[j + 1]));
+					features.setFloat(Float.BYTES * (i * numFeaturesPadded + j), Float.parseFloat(tokens[j + 1]));
 				}
 
-				n++;
 				i++;
 			}
 
@@ -205,7 +164,7 @@ public class NaiveBayes {
 		long end = System.nanoTime();
 
 		double duration = (end - start) / (double) 1000000000;
-		System.out.println("took: " + String.format("%.2f", duration) + "s");
+		System.out.println(String.format("took: %.2fs", duration));
 	}
 
 	private void classify(float epsilon){
@@ -214,47 +173,28 @@ public class NaiveBayes {
 		long start = System.nanoTime();
 
 		try {
-			for (int i = 0; i < NUM_REQUESTS; i++) {
-				predictions[i] = InAccelByteBufAllocator.DEFAULT.buffer(chunkSize * Integer.BYTES);
-			}
+			predictions = InAccelByteBufAllocator.DEFAULT.buffer(NUM_REQUESTS * chunkSize * Integer.BYTES);
 		} catch(Exception e) {
-			System.err.println("Could not allocate shared buffer. Is InAccel Coral running?");
+			System.err.println("Could not allocate shared buffer. Is InAccel service running?");
 			e.printStackTrace();
 			System.exit(-1);
 		}
 
-		int numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
-
-		for (int n = 0; n < NUM_REQUESTS; n++) {
-			for (int k = 0; k < numClasses; k++) {
-				_priors[n].setFloat(Float.BYTES * k, priors[k]);
-				for (int j = 0; j < numFeatures; j++) {
-					_means[n].setFloat(Float.BYTES * (k * numFeaturesPadded + j), means[k][j]);
-					_variances[n].setFloat(Float.BYTES * (k * numFeaturesPadded + j), variances[k][j]);
-				}
-			}
-		}
-
-		InAccel.Request[] requests = new InAccel.Request[NUM_REQUESTS];
-
-		for (int n = 0; n < NUM_REQUESTS; n++) {
-			requests[n] = new InAccel.Request("com.inaccel.ml.NaiveBayes.Classifier")
-				.arg(features[n])
-				.arg(_means[n])
-				.arg(_variances[n])
-				.arg(_priors[n])
-				.arg(predictions[n])
+		List<Future<Void>> responses = new ArrayList<>(NUM_REQUESTS);
+		try {
+			for (int n = 0; n < NUM_REQUESTS; n++) {
+				InAccel.Request request = new InAccel.Request("com.inaccel.ml.NaiveBayes.Classifier")
+				.arg(features.slice(Float.BYTES * n * chunkSize * numFeaturesPadded, Float.BYTES * chunkSize * numFeaturesPadded))
+				.arg(means)
+				.arg(variances)
+				.arg(priors)
+				.arg(predictions.slice(Integer.BYTES * n * chunkSize, Float.BYTES * chunkSize))
 				.arg(epsilon)
 				.arg(numClasses)
 				.arg(numFeatures)
 				.arg(chunkSize);
-		}
 
-	 	List<Future<Void>> responses = new ArrayList<>(NUM_REQUESTS);
-
-		try {
-			for (int n = 0; n < NUM_REQUESTS; n++) {
-				responses.add(n, InAccel.submit(requests[n]));
+				responses.add(n, InAccel.submit(request));
 			}
 		} catch(Exception e) {
 			System.err.println("Could not submit requests to InAccel Coral");
@@ -263,19 +203,18 @@ public class NaiveBayes {
 		}
 
 		try {
-			for (int n = 0; n < NUM_REQUESTS; n++) {
-				responses.get(n).get();
+			for (Future<Void> response: responses) {
+				response.get();
 			}
 		} catch(Exception e) {
-			System.err.println("Error waiting on request to finish!");
+			System.err.println("Error waiting on requests to finish!");
 			e.printStackTrace();
 			System.exit(-1);
 		}
 
-
 		long end = System.nanoTime();
 
 		double duration = (end - start) / (double) 1000000000;
-		System.out.println("took: " + String.format("%.2f", duration) + "s");
+		System.out.println(String.format("took: %.2fs", duration));
 	}
 }

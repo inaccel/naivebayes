@@ -21,16 +21,16 @@
 #include <iomanip>
 #include <iostream>
 #include <omp.h>
+#include <sstream>
 
 #include "NaiveBayes.h"
-#include "util.h"
 
 #define NUMCLASSES_MAX 64 // Max number of model classes
 #define NUMFEATURES_MAX 2047 // Max number of model features
 
 #define NUM_REQUESTS 8 // Number of requests for InAccel Coral
-#define VECTORIZATION 16 // Vectorization of features in HW
-#define PARALLELISM 8 // Parallelism for chunkSize in HW
+#define VECTORIZATION 8 // Vectorization of features in HW
+#define PARALLELISM 4096 // Parallelism for chunkSize in HW
 
 NaiveBayes::NaiveBayes(int numClasses, int numFeatures, int threads): numClasses(numClasses) {
 	assert (numClasses <= NUMCLASSES_MAX);
@@ -38,21 +38,12 @@ NaiveBayes::NaiveBayes(int numClasses, int numFeatures, int threads): numClasses
 
 	omp_set_num_threads(threads);
 
-	this->numFeatures = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
+	this->numFeatures = numFeatures;
+	this->numFeaturesPadded = (numFeatures + (VECTORIZATION - 1)) & (~(VECTORIZATION - 1));
 
 	priors.resize(numClasses);
-	means.resize(numClasses * this->numFeatures);
-	variances.resize(numClasses * this->numFeatures);
-
-	_priors.resize(NUM_REQUESTS);
-	_means.resize(NUM_REQUESTS);
-	_variances.resize(NUM_REQUESTS);
-
-	for (int i = 0; i < NUM_REQUESTS; i++) {
-		_priors[i].resize(numClasses);
-		_means[i].resize(numClasses * this->numFeatures);
-		_variances[i].resize(numClasses * this->numFeatures);
-	}
+	means.resize(numClasses * this->numFeaturesPadded);
+	variances.resize(numClasses * this->numFeaturesPadded);
 
 	std::cout << std::fixed;
 	std::cout << std::setprecision(2);
@@ -69,49 +60,27 @@ void NaiveBayes::load_data(std::string filename, int numExamples) {
 
 	chunkSize = (chunkSize + (PARALLELISM - 1)) & (~(PARALLELISM - 1));
 
-	features.resize(NUM_REQUESTS);
-	for (int i = 0; i < NUM_REQUESTS; i++) {
-		features[i].resize(chunkSize * numFeatures);
-	}
+	features.resize(NUM_REQUESTS * chunkSize * numFeaturesPadded);
 
 	std::ifstream train;
 	train.open(filename.c_str());
 
 	std::string line;
-	int n = 0, i = 0, c = 0;
+	std::string token;
+	int i = 0;
 
-	while (getline(train, line) && (n < numExamples)) {
-		if (line.length()) {
-			if (n && !(n % chunkSize)) {
-				c++;
-				i = 0;
-			}
+	while (getline(train, line) && (i < numExamples)) {
+		std::stringstream linestream(line);
 
-			std::vector<std::string> tokens = split(line);
-
-			labels[n] = atoi(tokens[0].c_str());
-
-			for (int j = 0; j < numFeatures; j++) {
-				features[c][i * numFeatures + j] = atof(tokens[j + 1].c_str());
-			}
-
-			n++;
-			i++;
-		}
-	}
-
-	_features.resize(numExamples);
-
-	i = 0; c = 0;
-	for (int n = 0; n < numExamples; n++) {
-		_features[n].resize(numFeatures);
-
-		c = n / chunkSize;
-		i = n % chunkSize;
+		getline(linestream, token, ',');
+		labels[i] = std::stoi(token);
 
 		for (int j = 0; j < numFeatures; j++) {
-			_features[n][j] = features[c][i * numFeatures + j];
+			getline(linestream, token, ',');
+			features[i * numFeaturesPadded + j] = std::stof(token);
 		}
+
+		i++;
 	}
 
 	train.close();
@@ -145,18 +114,12 @@ void NaiveBayes::train(std::string filename, int numExamples) {
 		}
 	}
 
-	int c = 0;
-	for (int n = 0, i = 0; n < labels.size(); n++, i++) {
-		int label = labels[n];
+	for (int i = 0; i < labels.size(); i++) {
+		int label = labels[i];
 		class_cnt[label]++;
 
-		if (n && !(n % chunkSize)) {
-			c++;
-			i = 0;
-		}
-
 		for (int j = 0; j < numFeatures; j++) {
-			float data = features[c][i * numFeatures + j];
+			float data = features[i * numFeaturesPadded + j];
 			sums[label * numFeatures + j] += data;
 			sq_sums[label * numFeatures + j] += data * data;
 		}
@@ -187,10 +150,7 @@ void NaiveBayes::classify(float epsilon, int hw) {
 
 	auto start = std::chrono::high_resolution_clock::now();
 
-	predictions.resize(NUM_REQUESTS);
-	for (int i = 0; i < NUM_REQUESTS; i++) {
-		predictions[i].resize(chunkSize);
-	}
+	predictions.resize(NUM_REQUESTS * chunkSize);
 
 	if (hw) classifyHW(epsilon);
 	else classifySW(epsilon);
@@ -203,46 +163,33 @@ void NaiveBayes::classify(float epsilon, int hw) {
 
 void NaiveBayes::classifySW(float epsilon) {
 	#pragma omp parallel for
-	for (int n = 0; n < labels.size(); n++) {
+	for (int i = 0; i < labels.size(); i++) {
 		float max_likelihood = -INFINITY;
-
-		int c = n / chunkSize;
-		int i = n % chunkSize;
 
 		for (int k = 0; k < numClasses; k++) {
 			float numerator = log(priors[k]);
 			for (int j = 0; j < numFeatures; j++) {
-				numerator += log(1 / sqrt(2 * M_PI * (variances[k * numFeatures + j] + epsilon))) + ((-1 * (_features[n][j] - means[k * numFeatures + j]) * (_features[n][j] - means[k * numFeatures + j])) / (2 * (variances[k * numFeatures + j] + epsilon)));
+				numerator += log(1 / sqrt(2 * M_PI * (variances[k * numFeatures + j] + epsilon))) + ((-1 * (features[i * numFeatures + j] - means[k * numFeatures + j]) * (features[i * numFeatures + j] - means[k * numFeatures + j])) / (2 * (variances[k * numFeatures + j] + epsilon)));
 			}
 
 			if (numerator > max_likelihood) {
 				max_likelihood = numerator;
-				predictions[c][i] = k;
+				predictions[i] = k;
 			}
 		}
 	}
 }
 
 void NaiveBayes::classifyHW(float epsilon) {
-	for (int n = 0; n < NUM_REQUESTS; n++) {
-		for (int k = 0; k < numClasses; k++) {
-			_priors[n][k] = priors[k];
-			for (int j = 0; j < numFeatures; j++) {
-				_means[n][k * numFeatures + j] = means[k * numFeatures + j];
-				_variances[n][k * numFeatures + j] = variances[k * numFeatures + j];
-			}
-		}
-	}
-
 	std::vector<std::future<void>> responses(NUM_REQUESTS);
 	for (int n = 0; n < NUM_REQUESTS; n++) {
 		inaccel::request nbc("com.inaccel.ml.NaiveBayes.Classifier");
 
-		nbc.arg(features[n])
-			.arg(_means[n])
-			.arg(_variances[n])
-			.arg(_priors[n])
-			.arg(predictions[n])
+		nbc.arg<float>(features.begin() + n * chunkSize * numFeatures, features.begin() + (n + 1) * chunkSize * numFeatures)
+			.arg(means)
+			.arg(variances)
+			.arg(priors)
+			.arg<int>(predictions.begin() + n * chunkSize, predictions.begin() + (n + 1) * chunkSize)
 			.arg(epsilon)
 			.arg(numClasses)
 			.arg(numFeatures)
@@ -259,18 +206,10 @@ void NaiveBayes::classifyHW(float epsilon) {
 void NaiveBayes::predict(float epsilon, int hw) {
 	classify(epsilon, hw);
 
-	int cor = 0, total = 0;
-	int c = 0;
-	for (int n = 0, i = 0; n < labels.size(); n++, i++) {
-		if (n && !(n % chunkSize)) {
-			c++;
-			i = 0;
-		}
-
-		if (predictions[c][i] == labels[n]) cor++;
-
-		total++;
+	int cor = 0;
+	for (int i = 0; i < labels.size(); i++) {
+		if (predictions[i] == labels[i]) cor++;
 	}
 
-	std::cout << "\n -- Accuracy: " << (100 * (float)(cor) / total) << " % (" << cor << "/" << total << ")\n\n";
+	std::cout << "\n -- Accuracy: " << (100 * (float)(cor) / labels.size()) << " % (" << cor << "/" << labels.size() << ")\n\n";
 }

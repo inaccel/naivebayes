@@ -72,7 +72,7 @@ To run the demo you first have to download the dataset upon which we will evalua
 * **Download Necessary Datasets:**  
 Create a folder called **data** under your home directory and download there MNIST letters dataset
 	``` bash
-	mkidr ~/data
+	mkdir ~/data
 	wget https://s3.amazonaws.com/inaccel-demo/data/nist/letters_csv_train.dat -O ~/data/letters_csv_train.dat
 	```
 
